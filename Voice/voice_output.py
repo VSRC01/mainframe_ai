@@ -1,5 +1,8 @@
-
-
+import re
+from Utils.config import KOKORO_API_KEY, KOKORO_API_URL, KOKORO_VOICE, OUTPUT_AUDIO_FILE
+from pydub import AudioSegment
+from pydub.playback import play
+from openai import OpenAI
 
 # ----------- VOICE OUTPUT (KokoroAPI) -----------
 
