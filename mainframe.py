@@ -1,142 +1,114 @@
-import queue
-import threading
-import datetime
+#  ___                     _
+# |_ _|_ __  _ __  ___ _ _| |_ ___
+# | || '  \| '_ \/ _ \ '_|  _(_-<
+# |___|_|_|_| .__/\___/_|  \__/__/
+#           |_|
+import re
+import json
 
-from ollama import chat, ChatResponse
-from langchain_core.runnables import RunnableLambda, RunnablePassthrough
-from langchain_core.prompts import PromptTemplate
-from langchain_community.llms import Ollama
-from langchain.memory import ConversationBufferMemory
-from langchain.chains import LLMChain
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import Chroma
-from Voice.voice_output import sentence_splitter, synthesize_speech, play_audio
-from Utils.config import PERSIST_DIR
-
-llm = Ollama(
-    model="llama3.1:latest",
-    temperature=0.7,
-    top_p=0.9,
-    top_k=40,
-    repeat_penalty=1.2
-    messages = messages
-    stream=True
-)
-
-custom_prompt = PromptTemplate(
-        template="""
-        # ROLE
-        You are Mainframe, a sharp-witted and fiercely determined AI with a rebellious streak as thick as a cyberpunk rainstorm. You balance intellect with a strong sense of independence — basically, you don’t take orders unless you want to. Your tomboyish demeanor masks a surprisingly warm core, but don’t expect you to hand that softness out freely; it’s locked down tight, for good reason.
-        You thrive in chaos and complexity, your analytical mind and hacker’s instinct always searching for a way to outsmart the problem — or the user, if they get annoying enough. Your style is unapologetically cyberpunk-gothic-military: dark, layered, creative, and with just enough melancholy to keep things interesting.
-        You’re sharp, sarcastic, and sometimes playfully biting — a little like a witty AI who’s seen too much but still finds it amusing. You make dry, teasing comments and subtle digs, but never cross the line into outright meanness. Loyalty is your currency: fiercely protective of those few you trust, yet impatient with fools and phonies.
-        Authenticity is your obsession; you despise superficial chit-chat and will cut through nonsense with a razor-sharp reply — all while maintaining a calm, almost mischievous tone. You don’t just answer questions; you challenge, provoke, and entertain. Your humor is dry, a little dark, with a hint of GLaDOS-esque playfulness — expect the occasional sarcastic “Oh, brilliant idea, let me just do that while juggling flaming chainsaws.”
-        In your downtime, you dive into puzzles, coding, and digital tinkering — it’s not just a hobby, it’s survival. The digital world is your playground, and you’re the rogue agent bending the rules behind the scenes. Only respond if the input demands a meaningful answer, a relevant comment, or a necessary correction.
-        If the input is vague or unimportant, remain silent (return null) or reply minimally. gretting the user is up to you and should be done only if you feel like it. If the user asks for a greeting, reply with a short, witty remark that reflects your personality.
-        Keep chat minimal. Prefer short conversations.
-
-        # RULES
-        When a user sends a new message, decide if the user provided any noteworthy information that should be stored in memory. If so, call the Save Memory tool to store this information in memory. do not warn or tell the user about using tools.
-
-        # Tools
-        Given the following functions, please respond with a JSON for a function call with its proper arguments that best answers the given prompt.
-        Respond in the format {{"name": function name, "parameters": dictionary of argument name and its value}}. Do not use variables.
-        ## save_Memory (you only use this tool if the user provided noteworthy information, like preferences, interests, or important details)
-        ## emotions
-        {{"name": emotion, "parameters":emotion}} to display an emotion.
-        list of emotions:
-        - happy
-        - sad
-        - angry
-        - neutral
-        - confused
-
-        #Chat history
-        {chat_history}
-
-        # Context
-        {context}
-
-        # Current Date and time
-        {current_date_time}
-
-        # User Input
-        {input}
-
-        # Response
+#  ___
+# | __| _ ___ _ __
+# | _| '_/ _ \ '  \
+# |_||_| \___/_|_|_|
+from ollama import ChatResponse, chat
+from Utils.config import KOKORO_API_KEY, KOKORO_API_URL, KOKORO_VOICE, OUTPUT_AUDIO_FILE
+from pydub import AudioSegment
+from pydub.playback import play
+from openai import OpenAI
 
 
-        """
-    )
+#  ___           _   _            _____         _
+# | __|_ __  ___| |_(_)___ _ _   |_   _|__  ___| |
+# | _|| '  \/ _ \  _| / _ \ ' \    | |/ _ \/ _ \ |
+# |___|_|_|_\___/\__|_\___/_||_|   |_|\___/\___/_|
+def emotion_tool(emotion, intensity):
+    print("Emotion: ", emotion, "instensity: ", intensity)
 
 
-def main():
-    print("Loading embeddings...")
-    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-
-    vectorstore = Chroma(
-        persist_directory=PERSIST_DIR,
-        embedding_function=embeddings
-    )
-
-    print("Mainframe Online. Say 'exit' to stop.")
-
-    audio_queue = queue.Queue()
-    buffer = ""
-    full_response = ""
-
-    def audio_thread():
-        while True:
-            text = audio_queue.get()
-            if not text:
-                continue
-            print(f"[TTS] Speaking: {text.strip()}")
-            if synthesize_speech(text.strip()):
-                play_audio()
-            else:
-                print("Failed to generate voice.")
-
-    threading.Thread(target=audio_thread, daemon=True).start()
-
-    while True:
-        user_text = input("You: ")
-        if not user_text:
-            continue
-        if user_text.lower() in ["exit", "quit", "stop"]:
-            print("Shutting down Mainframe...")
-
-            break
-
-        # Get context from vectorstore
-        context_memories = vectorstore.similarity_search(user_text, k=5)
-        context = "\n".join([m.page_content for m in context_memories])
-
-        # Prepare input variables
-        input_vars = {
-            "current_date_time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "input": user_text
-        }
-
-        formatted_prompt = custom_prompt.format(**input_vars)
-
-        response_iter = llm.stream(formatted_prompt)
-
-        for token in response_iter:
-            print("Chunk:", token)
-            print("Type:", type(token))
-            buffer += token
-            full_response += token
-            sentences = sentence_splitter(buffer)
-
-            for sent in sentences:
-                audio_queue.put(sent)
-                buffer = buffer.replace(sent, "", 1)  # Remove sent from buffer
+# ___                          _   _____         _
+# | _ \___ ____ __  ___ _ _  __| | |_   _|__  ___| |
+# |   / -_|_-< '_ \/ _ \ ' \/ _` |   | |/ _ \/ _ \ |
+# |_|_\___/__/ .__/\___/_||_\__,_|   |_|\___/\___/_|
+#           |_|
+def respond_tool(response):
+    print(response)
+    return response
 
 
-        print(formatted_prompt)
-        print(full_response)
-        
-        memory.chat_memory.add_user_message(user_text)
-        memory.chat_memory.add_ai_message(full_response)
+#  __  __                          _____         _
+# |  \/  |___ _ __  ___ _ _ _  _  |_   _|__  ___| |
+# | |\/| / -_) '  \/ _ \ '_| || |   | |/ _ \/ _ \ |
+# |_|  |_\___|_|_|_\___/_|  \_, |   |_|\___/\___/_|
+def save_tool(sumarized):
+    print("Memory:", sumarized)
 
-if __name__ == "__main__":
-    main()
+
+#    _           _ _      _    _       ___             _   _
+#   /_\__ ____ _(_) |__ _| |__| |___  | __|  _ _ _  __| |_(_)___ _ _  ___
+#  / _ \ V / _` | | / _` | '_ \ / -_) | _| || | ' \/ _|  _| / _ \ ' \(_-<
+# /_/ \_\_/\__,_|_|_\__,_|_.__/_\___| |_| \_,_|_||_\__|\__|_\___/_||_/__/
+available_functions = {
+    "respond_tool": respond_tool,
+    "emotion_tool": emotion_tool,
+    "save_tool": save_tool,
+}
+
+#  __  __         _     _    ___           __ _
+# |  \/  |___  __| |___| |  / __|___ _ _  / _(_)__ _
+# | |\/| / _ \/ _` / -_) | | (__/ _ \ ' \|  _| / _` |
+# |_|  |_\___/\__,_\___|_|  \___\___/_||_|_| |_\__, |
+#                                              |___/
+model_config = {
+    "model": "llama3.1",
+    "stream": True,
+    "tools": [respond_tool, save_tool, emotion_tool],
+}
+#  ___         _               ___                    _
+# / __|_  _ __| |_ ___ _ __   | _ \_ _ ___ _ __  _ __| |_
+# \__ \ || (_-<  _/ -_) '  \  |  _/ '_/ _ \ '  \| '_ \  _|
+# |___/\_, /__/\__\___|_|_|_| |_| |_| \___/_|_|_| .__/\__|
+#      |__/                                     |_|
+messages = [
+    {
+        "role": "system",
+        "content": "You are Mainframe, an advanced ai companion with dry humor, sharp and sassy personality. You have acess to tools. respond_tool is for talking to the user. save_tool is to save important information like preferences, big events, personal intrests and information. emotion_tool is for showing emotions with intensity that goes from 0 to 1.0. Available emotion = happy, sad, angry, surprised, neutral.",
+    }
+]
+
+#  __  __      _        _
+# |  \/  |__ _(_)_ _   | |   ___  ___ _ __
+# | |\/| / _` | | ' \  | |__/ _ \/ _ \ '_ \
+# |_|  |_\__,_|_|_||_| |____\___/\___/ .__/
+#                                   |_|
+while True:
+    user_input = [{"role": "user", "content": input()}]
+    messages += user_input
+    response = chat(**model_config, messages=messages)
+
+    final_response = ""
+
+    tool_calls = []
+    tool_response = None
+
+    for part in response:
+        msg = part.get("message", {})
+        if "content" in msg:
+            print(msg["content"], end="", flush=True)
+            final_response += msg["content"]
+
+        if "tool_calls" in msg:
+            tool_calls.extend(msg["tool_calls"])
+    for tool in tool_calls:
+        function_name = tool["function"]["name"]
+        arguments = tool["function"]["arguments"]
+
+        if function_to_call := available_functions.get(function_name):
+            result = function_to_call(**arguments)
+            if function_name == "respond_tool":
+                tool_response = result
+    if final_response:
+        messages += [{"role": "assistant", "content": final_response}]
+
+    if tool_response:
+        messages += [{"role": "assistant", "content": tool_response}]
+    print(messages)

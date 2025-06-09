@@ -1,0 +1,6 @@
+openai
+pydub
+langchain
+langchain-community
+chromadb
+ollama
