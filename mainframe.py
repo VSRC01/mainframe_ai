@@ -6,6 +6,12 @@
 import re
 import chromadb
 import json
+import uuid
+import os
+import queue
+import threading
+import time
+import pyaudio
 
 #  ___
 # | __| _ ___ _ __
@@ -13,12 +19,12 @@ import json
 # |_||_| \___/_|_|_|
 from ollama import ChatResponse, chat
 from Utils.config import KOKORO_API_KEY, KOKORO_API_URL, KOKORO_VOICE, OUTPUT_AUDIO_FILE
-from pydub import AudioSegment
-from pydub.playback import play
 from openai import OpenAI
 from sentence_transformers import SentenceTransformer
 from datetime import datetime
 from websockets.sync.client import connect
+from pydub import AudioSegment
+from pydub.playback import play
 
 #  ___           _   _            _____         _
 # |_ _|_ __  ___| |_(_)___ _ _   |_   _|__  ___| |
@@ -29,11 +35,13 @@ WS_URL = "ws://localhost:6543"
 
 def emotion_tool(emotion, intensity):
     print("Emotion:", emotion, "instensity:", intensity)
-    return ("emotion displayed:", emotion, intensity)
     try:
         with connect(WS_URL) as ws:
             payload = {"type": "emotion", "emotion": emotion, "intensity": intensity}
             ws.send(json.dumps(payload))
+            ws.close()
+            return ("emotion displayed:", emotion, intensity)
+
     except Exception as e:
         print("Failed to send emotion", e)
 
@@ -48,7 +56,6 @@ collection = chroma_client.get_or_create_collection(name="memory")
 
 def save_tool(sumarized):
     print("Memory:", sumarized)
-    return ("memory saved:", sumarized)
     timestamp = datetime.now().isoformat()
     embedding = embedding_model.encode([sumarized])[0]
     collection.add(
@@ -57,6 +64,7 @@ def save_tool(sumarized):
         metadatas=[{"timestamp": timestamp}],
         ids=[f"{timestamp}_{hash(sumarized)}"],
     )
+    return ("memory saved:", sumarized)
 
 
 #    _           _ _      _    _       ___             _   _
@@ -96,13 +104,20 @@ client = OpenAI(
 # \__ \ || | ' \  _| ' \/ -_|_-< |_ / -_) (_-< '_ \/ -_) -_) _| ' \
 # |___/\_, |_||_\__|_||_\___/__/_/__\___| /__/ .__/\___\___\__|_||_|
 #      |__/                                  |_|
-def synthesize_speech(text: str, filename=OUTPUT_AUDIO_FILE):
+def synthesize_speech(text: str):
+    player_stream = pyaudio.PyAudio().open(
+        format=pyaudio.paInt16, channels=1, rate=24000, output=True
+    )
+
+    filename = f"audio_{uuid.uuid4().hex}.mp3"
+
     try:
         with client.audio.speech.with_streaming_response.create(
-            model="kokoro", voice=KOKORO_VOICE, input=text, response_format="mp3"
+            model="kokoro", voice=KOKORO_VOICE, input=text, response_format="pcm"
         ) as response:
-            response.stream_to_file(filename)
-        return True
+            for chunk in response.iter_bytes(chunk_size=1024):
+                player_stream.write(chunk)
+        return filename
     except Exception as e:
         print("TTS synthesis error:", e)
         return False
@@ -113,10 +128,12 @@ def synthesize_speech(text: str, filename=OUTPUT_AUDIO_FILE):
 # |  _/ / _` | || |  / _ \ || / _` | / _ \
 # |_| |_\__,_|\_, | /_/ \_\_,_\__,_|_\___/
 #             |__/
-def play_audio(filename=OUTPUT_AUDIO_FILE):
+def play_audio(filename):
     try:
         audio = AudioSegment.from_file(filename, format="mp3")
         play(audio)
+        time.sleep(1)
+        os.remove(filename)
     except Exception as e:
         print("Error playing audio:", e)
 
@@ -130,6 +147,32 @@ def sentence_splitter(text_buffer):
     sentences = re.findall(r"[^.!?]+[.!?]+(?:\s|$)", text_buffer)
     return sentences
 
+
+#  _____ _____ ___  __      __       _
+# |_   _|_   _/ __| \ \    / /__ _ _| |_____ _ _
+#   | |   | | \__ \  \ \/\/ / _ \ '_| / / -_) '_|
+#   |_|   |_| |___/   \_/\_/\___/_| |_\_\___|_|
+tts_queue = queue.Queue()
+spoken_sentences = set()
+
+
+def tts_worker():
+    while True:
+        sent = tts_queue.get()
+        if sent is None:
+            break
+        if sent in spoken_sentences:
+            continue
+        try:
+            filename = synthesize_speech(sent)
+            if filename:
+                spoken_sentences.add(sent)
+        except Exception as e:
+            print(e)
+        tts_queue.task_done()
+
+
+threading.Thread(target=tts_worker, daemon=True).start()
 
 #  ___                  _      __  __                   _
 # / __| ___ __ _ _ _ __| |_   |  \/  |___ _ __  ___ _ _(_)___ ___
@@ -187,12 +230,13 @@ def clip_history(messages, keep_turns=10):
 # |_|  |_\__,_|_|_||_| |____\___/\___/ .__/
 #                                   |_|
 while True:
+    text_buffer = ""
     final_response = ""
     user_input_text = input()
     query = user_input_text
     recalled_memories = search_memory(query)
     memory_messages = [
-        {"role:": "system", "content": "Relevant memory: " + mem}
+        {"role": "system", "content": "Relevant memory: " + mem}
         for mem in recalled_memories
     ]
     messages = [messages[0]] + memory_messages + messages[1:]
@@ -214,12 +258,15 @@ while True:
                 {"role": "tool", "content": str(output), "name": tool.function.name}
             )
             for part in chat("llama3.1", messages=messages, stream=True):
+                text_buffer += part["message"]["content"]
                 final_response += part["message"]["content"]
                 print(part["message"]["content"], end="", flush=True)
-            sentences = sentence_splitter(final_response)
-
-            for sentence in sentences:
-                synthesize_speech(sentence)
-                play_audio()
+                sentences = sentence_splitter(text_buffer)
+                for sent in sentences:
+                    sent = sent.strip()
+                    if sent and sent not in spoken_sentences:
+                        tts_queue.put(sent)
+                        time.sleep(0.1)
+                        text_buffer = text_buffer.replace(sent, "", 1)
     messages.append(timestamped_message("assistant", final_response))
     messages = clip_history(messages)
