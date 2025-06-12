@@ -7,7 +7,6 @@ import re
 import chromadb
 import json
 import uuid
-import os
 import queue
 import threading
 import time
@@ -18,13 +17,11 @@ import pyaudio
 # | _| '_/ _ \ '  \
 # |_||_| \___/_|_|_|
 from ollama import ChatResponse, chat
-from Utils.config import KOKORO_API_KEY, KOKORO_API_URL, KOKORO_VOICE, OUTPUT_AUDIO_FILE
+from Utils.config import KOKORO_API_KEY, KOKORO_API_URL, KOKORO_VOICE
 from openai import OpenAI
 from sentence_transformers import SentenceTransformer
 from datetime import datetime
 from websockets.sync.client import connect
-from pydub import AudioSegment
-from pydub.playback import play
 
 #  ___           _   _            _____         _
 # |_ _|_ __  ___| |_(_)___ _ _   |_   _|__  ___| |
@@ -123,21 +120,6 @@ def synthesize_speech(text: str):
         return False
 
 
-#  ___ _               _          _ _
-# | _ \ |__ _ _  _    /_\ _  _ __| (_)___
-# |  _/ / _` | || |  / _ \ || / _` | / _ \
-# |_| |_\__,_|\_, | /_/ \_\_,_\__,_|_\___/
-#             |__/
-def play_audio(filename):
-    try:
-        audio = AudioSegment.from_file(filename, format="mp3")
-        play(audio)
-        time.sleep(1)
-        os.remove(filename)
-    except Exception as e:
-        print("Error playing audio:", e)
-
-
 #  ___          _                     ___      _ _ _   _
 # / __| ___ _ _| |_ ___ _ _  __ ___  / __|_ __| (_) |_| |_ ___ _ _
 # \__ \/ -_) ' \  _/ -_) ' \/ _/ -_) \__ \ '_ \ | |  _|  _/ -_) '_|
@@ -199,8 +181,8 @@ def search_memory(query: str, top_k=4):
 #   |_| |_|_|_|_\___/__/\__|_|_|_| .__/ |_|  |_\___/__/__/\__, |
 #                                |_|                      |___/
 def timestamped_message(role, content):
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return {"role": role, "content": f"[{now}] {content}"}
+    now = datetime.now().isoformat()
+    return {"role": role, "content": content, "metadata": {"timestamp": now}}
 
 
 #  __  __                           ___ _ _
