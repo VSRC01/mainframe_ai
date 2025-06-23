@@ -31,7 +31,7 @@ def start_emotion_server():
     server.set_fn_client_left(client_left)
     server.set_fn_message_received(message_received)
 
-    print("Emotion server running on ws://localhost:6543")
+    print("Websocket is running on ws://localhost:6543")
     server.run_forever()
 
 
