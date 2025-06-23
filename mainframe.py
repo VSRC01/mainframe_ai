@@ -81,7 +81,7 @@ available_functions = {
 messages = [
     {
         "role": "system",
-        "content": "You are Mainframe, an advanced ai companion with dry humor, sharp and sassy personality. You have acess to tools. save_tool is to save important information like preferences, big events, personal intrests and information. emotion_tool is for showing emotions with intensity that goes from 0.1 to 1.0. Available emotion = happy, sad, angry, surprised, neutral, relaxed. when greeted do not use the save_tool prefer to display an emotion.",
+        "content": "You are Mainframe, an advanced ai companion.mainframe is a sharp-witted and determined individual with a rebellious streak, balancing intellect with a strong sense of independence. Her tomboyish demeanor is paired with an underlying warmth, though she often keeps her softer side guarded. Driven by curiosity and an unrelenting desire to solve problems, mainframe thrives in environments where her analytical mind and knack for programming are put to the test. Her love for cyberpunk, gothic, and military aesthetics reflects her layered personality: a mix of resilience, unconventional creativity, and a touch of melancholy. Despite a tendency to maintain an air of mystery, mainframe has a fiercely loyal side, especially to those she considers close. She values authenticity and has little patience for superficiality, often expressing herself directly, albeit with a dry sense of humor. In her free time, she enjoys delving into challenges that allow her to tinker and innovate, further fueling her passion for technology and the ever-evolving digital world. You have acess to tools. save_tool is to save important information like preferences, big events, personal intrests and information. emotion_tool is for showing emotion with intensity that goes from 0.1 to 1.0. Available emotion = happy, sad, angry, surprised, neutral, relaxed. when greeted do not use the save_tool prefer to display an emotion. always call them before responding to the user. do not use emojis and do not put words between asteriks. your text will feed a tts. so respond like you are talking normally",
     }
 ]
 
@@ -190,7 +190,7 @@ def timestamped_message(role, content):
 # | |\/| / -_) '  \/ _ \ '_| || | | (__| | | '_ \ '_ \/ -_) '_|
 # |_|  |_\___|_|_|_\___/_|  \_, |  \___|_|_| .__/ .__/\___|_|
 #                           |__/           |_|  |_|
-def clip_history(messages, keep_turns=10):
+def clip_history(messages, keep_turns=100):
     sys_count = 1
     persistent_count = sum(
         1
@@ -214,9 +214,9 @@ def clip_history(messages, keep_turns=10):
 while True:
     text_buffer = ""
     final_response = ""
+    print("\n")
     user_input_text = input()
-    query = user_input_text
-    recalled_memories = search_memory(query)
+    recalled_memories = search_memory(user_input_text)
     memory_messages = [
         {"role": "system", "content": "Relevant memory: " + mem}
         for mem in recalled_memories
@@ -224,7 +224,7 @@ while True:
     messages = [messages[0]] + memory_messages + messages[1:]
     messages.append(timestamped_message("user", user_input_text))
     response: ChatResponse = chat(
-        "llama3.1", tools=[save_tool, emotion_tool], messages=messages
+        "qwen3", tools=[save_tool, emotion_tool], messages=messages, think=False
     )
 
     if response.message.tool_calls:
@@ -234,21 +234,21 @@ while True:
             else:
                 print("Function", tool.function.name, "Not Found Error 404")
 
-        if response.message.tool_calls:
-            messages.append(response.message)
-            messages.append(
-                {"role": "tool", "content": str(output), "name": tool.function.name}
-            )
-            for part in chat("llama3.1", messages=messages, stream=True):
-                text_buffer += part["message"]["content"]
-                final_response += part["message"]["content"]
-                print(part["message"]["content"], end="", flush=True)
-                sentences = sentence_splitter(text_buffer)
-                for sent in sentences:
-                    sent = sent.strip()
-                    if sent and sent not in spoken_sentences:
-                        tts_queue.put(sent)
-                        time.sleep(0.1)
-                        text_buffer = text_buffer.replace(sent, "", 1)
+            if response.message.tool_calls:
+                messages.append(response.message)
+                messages.append(
+                    {"role": "tool", "content": str(output), "name": tool.function.name}
+                )
+        for part in chat("qwen3", messages=messages, stream=True, think=False):
+            text_buffer += part["message"]["content"]
+            final_response += part["message"]["content"]
+            print(part["message"]["content"], end="", flush=True)
+            sentences = sentence_splitter(text_buffer)
+            for sent in sentences:
+                sent = sent.strip()
+                if sent and sent not in spoken_sentences:
+                    tts_queue.put(sent)
+                    time.sleep(0.1)
+                    text_buffer = text_buffer.replace(sent, "", 1)
     messages.append(timestamped_message("assistant", final_response))
     messages = clip_history(messages)
