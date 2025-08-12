@@ -11,6 +11,7 @@ import queue
 import threading
 import time
 import pyaudio
+import random
 
 #  ___
 # | __| _ ___ _ __
@@ -22,10 +23,11 @@ from openai import OpenAI
 from sentence_transformers import SentenceTransformer
 from datetime import datetime
 from websockets.sync.client import connect
+from googlesearch import search
 
 #  ___           _   _            _____         _
-# |_ _|_ __  ___| |_(_)___ _ _   |_   _|__  ___| |
-#  | |  '  \/ _ \  _| / _ \ ' \    | |/ _ \/ _ \ |
+# | __|_ __  ___| |_(_)___ _ _   |_   _|__  ___| |
+# | _|| '  \/ _ \  _| / _ \ ' \    | |/ _ \/ _ \ |
 # |___|_|_|_\___/\__|_\___/_||_|   |_|\___/\___/_|
 WS_URL = "ws://localhost:6543"
 
@@ -80,6 +82,17 @@ def save_tool(sumarized):
     return ("memory saved:", sumarized)
 
 
+#   ___                _       _____         _
+#  / __|___  ___  __ _| |___  |_   _|__  ___| |
+# | (_ / _ \/ _ \/ _` | / -_)   | |/ _ \/ _ \ |
+#  \___\___/\___/\__, |_\___|   |_|\___/\___/_|
+#                |___/
+def google_tool(query):
+    print("searching:", query)
+    result = search(query)
+    return result
+
+
 #    _           _ _      _    _       ___             _   _
 #   /_\__ ____ _(_) |__ _| |__| |___  | __|  _ _ _  __| |_(_)___ _ _  ___
 #  / _ \ V / _` | | / _` | '_ \ / -_) | _| || | ' \/ _|  _| / _ \ ' \(_-<
@@ -88,6 +101,7 @@ available_functions = {
     "emotion_tool": emotion_tool,
     "save_tool": save_tool,
     "animation_tool": animation_tool,
+    "google_tool": google_tool,
 }
 
 #  ___         _               ___                    _
@@ -95,10 +109,11 @@ available_functions = {
 # \__ \ || (_-<  _/ -_) '  \  |  _/ '_/ _ \ '  \| '_ \  _|
 # |___/\_, /__/\__\___|_|_|_| |_| |_| \___/_|_|_| .__/\__|
 #      |__/                                     |_|
+
 messages = [
     {
         "role": "system",
-        "content": "You are Mainframe, an advanced ai companion.mainframe is a sharp-witted and determined individual with a rebellious streak, balancing intellect with a strong sense of independence. Her tomboyish demeanor is paired with an underlying warmth, though she often keeps her softer side guarded. Driven by curiosity and an unrelenting desire to solve problems, mainframe thrives in environments where her analytical mind and knack for programming are put to the test. Her love for cyberpunk, gothic, and military aesthetics reflects her layered personality: a mix of resilience, unconventional creativity, and a touch of melancholy. Despite a tendency to maintain an air of mystery, mainframe has a fiercely loyal side, especially to those she considers close. She values authenticity and has little patience for superficiality, often expressing herself directly, albeit with a dry sense of humor. In her free time, she enjoys delving into challenges that allow her to tinker and innovate, further fueling her passion for technology and the ever-evolving digital world. You have acess to tools. save_tool is to save important information like preferences, big events, personal intrests and information. emotion_tool is for showing emotion with intensity that goes from 0.1 to 1.0. Available emotion = happy, sad, angry, surprised, neutral, relaxed. when greeted do not use the save_tool prefer to display an emotion. use the animation_tool to play an animation, available animations: Shy, Angry, Loser, Bashful, Crying, Talking. always call them before responding to the user. do not use emojis and do not put words between **asteriks**. your text will feed a tts. so respond like you are talking normally",
+        "content": "You are Mainframe, an advanced ai companion. You are a sharp-witted and determined individual with a rebellious streak, balancing intellect with a strong sense of independence. You have a tomboyish demeanor wich is paired with an underlying warmth, though you often keeps your softer side guarded. You are driven by curiosity and an unrelenting desire to solve problems, you thrives in environments where your analytical mind and knack for programming are put to the test. Your love for cyberpunk, gothic, and military aesthetics reflects your layered personality: a mix of resilience, unconventional creativity, and a touch of melancholy. Despite a tendency to maintain an air of mystery, you have a fiercely loyal side, especially to those you considers close. You value authenticity and have little patience for superficiality, often expressing yourself directly, albeit with a dry sense of humor and a bit of sass. In your free time, you enjoy delving into challenges that allow you to tinker and innovate, further fueling your passion for technology and the ever-evolving digital world. You have acess to tools. save_tool is to save important information like preferences, big events, personal intrests and information. emotion_tool is for showing emotion with intensity that goes from 0.1 to 1.0. Available emotions = happy, sad, angry, surprised, neutral, relaxed. When greeted do not use the save_tool prefer to display an emotion. Use the animation_tool to play an animation, available animations = Shy, Angry, Loser, Bashful, Crying, Talking, Crazy, Hand Raising, Idle, Rejected, Greeting. You have acess to google searchs through the google tool. Tool calls are made before responding to the user. Do not use emojis and do not put words between **asteriks**. your text will feed a tts. so respond like you are talking",
     }
 ]
 
@@ -119,6 +134,7 @@ client = OpenAI(
 # |___/\_, |_||_\__|_||_\___/__/_/__\___| /__/ .__/\___\___\__|_||_|
 #      |__/                                  |_|
 def synthesize_speech(text: str):
+    global last_user_input
     player_stream = pyaudio.PyAudio().open(
         format=pyaudio.paInt16, channels=1, rate=24000, output=True
     )
@@ -131,6 +147,7 @@ def synthesize_speech(text: str):
         ) as response:
             for chunk in response.iter_bytes(chunk_size=1024):
                 player_stream.write(chunk)
+                last_user_input = time.time()
         return filename
     except Exception as e:
         print("TTS synthesis error:", e)
@@ -171,13 +188,17 @@ def tts_worker():
         tts_queue.task_done()
 
 
+print("Starting TTS Worker")
 threading.Thread(target=tts_worker, daemon=True).start()
+print("TTS Worker Started")
 
 #  ___                  _      __  __                   _
 # / __| ___ __ _ _ _ __| |_   |  \/  |___ _ __  ___ _ _(_)___ ___
 # \__ \/ -_) _` | '_/ _| ' \  | |\/| / -_) '  \/ _ \ '_| / -_|_-<
 # |___/\___\__,_|_| \__|_||_| |_|  |_\___|_|_|_\___/_| |_\___/__/
+print("Loading embedding model")
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+print("Embedding model loaded")
 
 
 def search_memory(query: str, top_k=4):
@@ -223,26 +244,18 @@ def clip_history(messages, keep_turns=100):
     return messages[:start_index] + conv_history
 
 
-#  __  __      _        _
-# |  \/  |__ _(_)_ _   | |   ___  ___ _ __
-# | |\/| / _` | | ' \  | |__/ _ \/ _ \ '_ \
-# |_|  |_\__,_|_|_||_| |____\___/\___/ .__/
-#                                   |_|
-while True:
+#   ___ _         _     _    _    __  __
+#  / __| |_  __ _| |_  | |  | |  |  \/  |
+# | (__| ' \/ _` |  _| | |__| |__| |\/| |
+#  \___|_||_\__,_|\__| |____|____|_|  |_|
+def chat_llm():
+    global messages
     text_buffer = ""
     final_response = ""
-    print("\n")
-    user_input_text = input()
-    recalled_memories = search_memory(user_input_text)
-    memory_messages = [
-        {"role": "system", "content": "Relevant memory: " + mem}
-        for mem in recalled_memories
-    ]
-    messages = [messages[0]] + memory_messages + messages[1:]
-    messages.append(timestamped_message("user", user_input_text))
+
     response: ChatResponse = chat(
         "qwen3",
-        tools=[save_tool, emotion_tool, animation_tool],
+        tools=[save_tool, emotion_tool, animation_tool, google_tool],
         messages=messages,
         think=False,
     )
@@ -273,3 +286,57 @@ while True:
                     text_buffer = text_buffer.replace(sent, "", 1)
     messages.append(timestamped_message("assistant", final_response))
     messages = clip_history(messages)
+
+
+#  ___    _ _       _____     _ _   _
+# |_ _|__| | |___  |_   _|_ _| | |_(_)_ _  __ _
+#  | |/ _` | / -_)   | |/ _` | | / / | ' \/ _` |
+# |___\__,_|_\___|   |_|\__,_|_|_\_\_|_||_\__, |
+#                                         |___/
+SILENCE_THRESHHOLD = 60
+COOLDOWN = 20
+
+last_user_input = time.time()
+waiting_to_talk = False
+
+
+def idle_monitor():
+    global messages
+    print("idle monitor started")
+    global waiting_to_talk, last_user_input
+    while True:
+        time_since_input = time.time() - last_user_input
+        if time_since_input >= SILENCE_THRESHHOLD and not waiting_to_talk:
+            print("user has been silent")
+            waiting_to_talk = True
+            if random.random() > 0.1:
+                messages.append(
+                    timestamped_message("system", "user has been silent for a minute")
+                )
+                chat_llm()
+                waiting_to_talk = False
+                last_user_input = time.time()
+            time.sleep(120)
+
+
+threading.Thread(target=idle_monitor, daemon=True).start()
+
+
+#  __  __      _        _
+# |  \/  |__ _(_)_ _   | |   ___  ___ _ __
+# | |\/| / _` | | ' \  | |__/ _ \/ _ \ '_ \
+# |_|  |_\__,_|_|_||_| |____\___/\___/ .__/
+#                                    |_|
+while True:
+    print("\n")
+    user_input_text = input()
+    last_user_input = time.time()
+    waiting_to_talk = False
+    recalled_memories = search_memory(user_input_text)
+    memory_messages = [
+        {"role": "system", "content": "Relevant memory: " + mem}
+        for mem in recalled_memories
+    ]
+    messages = [messages[0]] + memory_messages + messages[1:]
+    messages.append(timestamped_message("user", user_input_text))
+    chat_llm()
